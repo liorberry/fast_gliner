@@ -1,5 +1,0 @@
-[target.aarch64-unknown-linux-gnu]
-# onnxruntime's prebuilt aarch64 static lib uses GCC outline-atomics helpers
-# (__aarch64_cas8_sync) that live only in libgcc.a. rustc links with
-# -nodefaultlibs so libgcc.a is never searched; pull it in explicitly.
-rustflags = ["-C", "link-arg=-lgcc"]
