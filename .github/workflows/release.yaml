@@ -3,6 +3,7 @@ on:
   push:
     tags:
       - v*
+  workflow_dispatch:
 
 env:
   PYPI_TOKEN: ${{ secrets.PYPI_TOKEN_DIST }}
@@ -37,7 +38,7 @@ jobs:
   build:
     name: build on ${{ matrix.platform || matrix.os }} (${{ matrix.target }} - ${{ matrix.manylinux || 'auto' }})
     needs: [lock_exists]
-    if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -53,6 +54,10 @@ jobs:
             platform: linux
             target: aarch64
             manylinux: manylinux_2_28
+            # onnxruntime's static lib references GCC outline-atomics helpers
+            # (__aarch64_cas8_sync) that exist only in libgcc.a; rustc links with
+            # -nodefaultlibs so libgcc.a is never searched. Pull it in explicitly.
+            rustflags: -C link-arg=-lgcc
 
           - os: macos
             platform: macos
@@ -86,6 +91,8 @@ jobs:
       
       - name: Build wheels
         uses: PyO3/maturin-action@v1
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.rustflags }}
         with:
           target: ${{ matrix.target }}
           working-directory: ./bindings/python
@@ -99,6 +106,16 @@ jobs:
             -e OPENSSL_INCLUDE_DIR=/usr/include
             -e OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
             -e PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig
+
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.platform == 'linux' && matrix.target == 'aarch64'
+
+      - name: Smoke-test aarch64 wheel
+        if: matrix.platform == 'linux' && matrix.target == 'aarch64'
+        working-directory: ./bindings/python
+        run: |
+          docker run --rm --platform linux/arm64 -v "$PWD/dist:/dist" python:3.12-slim \
+            sh -c "pip install -q /dist/*cp312*aarch64*.whl && python -c 'import fast_gliner; print(fast_gliner)'"
 
       - run: ${{ matrix.ls || 'ls -lh' }} dist/
         working-directory: ./bindings/python
@@ -134,6 +151,7 @@ jobs:
     name: Upload package to PyPi
     runs-on: ubuntu-latest
     needs: [build, build-sdist]
+    if: false  # TEST MODE: disabled to prevent accidental PyPI publish
 
     steps:
       - uses: actions/checkout@v4
